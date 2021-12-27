@@ -14,43 +14,53 @@ class ActivityService
     private const ATTRIBUTES = 'attributes';
     private const SUBJECT_ID = 'subject_id';
     private const SIGNET_AT = 'signed_at';
+    private const SUBJECT_TYPE = 'subject_type';
 
     /**
      * @return Collection
      */
     public function getActivityLogs(): Collection
     {
-        $logs = Activity::where('subject_type', self::IDEA_BUY_ORDER)
+        $logs = Activity::query()->where(self::SUBJECT_TYPE, self::IDEA_BUY_ORDER)
             ->get();
+        $signedLogs = $logs->where('properties.attributes.status', self::SIGNED);
+        $result = collect();
 
-        $result = [];
-        $i = 0;
-
-        $logs->each(function (Activity $activity) use (&$result, &$i) {
-            foreach ($activity->properties as $value) {
-                if (array_key_exists(self::STATUS, $value) && $value[self::STATUS] === self::SIGNED) {
-                    $result[$i][self::SUBJECT_ID] = $activity->subject_id;
-                    if (array_key_exists(self::STATUS_UPDATED, $value)) {
-                        $result[$i][self::SIGNET_AT] = $value[self::STATUS_UPDATED];
-                    } else {
-                        $activities = Activity::query()
-                            ->where(self::SUBJECT_ID, $activity->subject_id)
-                            ->get();
-                        $activities->map(function ($act) use (&$result, $i) {
-                            if (array_key_exists(self::ATTRIBUTES, $act->properties->toArray())
-                                &&
-                                array_key_exists(self::STATUS_UPDATED, $act->properties[self::ATTRIBUTES])) {
-                                $result[$i][self::SIGNET_AT] = $act->properties[self::ATTRIBUTES][self::STATUS_UPDATED];
-                            };
-                        });
-                    }
-                    $i++;
-                }
+        $signedLogs->each(function (Activity $activity) use (&$result, $logs) {
+            if (isset($activity->properties[self::ATTRIBUTES][self::STATUS_UPDATED])) {
+                $result->add([
+                    self::SUBJECT_ID => $activity->subject_id,
+                    self::SIGNET_AT => $activity->properties[self::ATTRIBUTES][self::STATUS_UPDATED]
+                ]);
+                return;
             }
 
+            $previousLogs = $logs->where(self::SUBJECT_ID, $activity->subject_id)
+                ->where(self::SUBJECT_TYPE, self::IDEA_BUY_ORDER);
+
+            /** @var ?Activity $sentLog */
+            $sentLog = $previousLogs->firstWhere('properties.attributes.status', 'sent');
+
+            if (isset($sentLog->properties[self::ATTRIBUTES][self::STATUS_UPDATED])) {
+                $result->add([
+                    self::SUBJECT_ID => $activity->subject_id,
+                    self::SIGNET_AT => $activity->properties[self::ATTRIBUTES][self::STATUS_UPDATED]
+                ]);
+                return;
+            }
+
+            /** @var ?Activity $createdLog */
+            $createdLog = $previousLogs->firstWhere('description', 'created');
+
+            if (isset($createdLog->properties[self::ATTRIBUTES][self::STATUS_UPDATED])) {
+                $result->add([
+                    self::SUBJECT_ID => $createdLog->subject_id,
+                    self::SIGNET_AT => $createdLog->properties[self::ATTRIBUTES][self::STATUS_UPDATED]
+                ]);
+            }
         });
 
-        return collect($result)->unique('subject_id');
+        return $result;
     }
 
 }
